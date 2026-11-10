@@ -96,9 +96,8 @@ pub fn check(root: &Path) -> bool {
     };
     let mut catalogs = Vec::new();
     for code in ["zh-hans", "zh-hant", "ru", "ko", "cs", "de", "ka", "es", "it", "vi", "pt-br", "tr", "th", "et"] {
-        let path = source.join("i18n").join(format!("{code}.tsv"));
-        let Ok(text) = std::fs::read_to_string(&path) else {
-            eprintln!("i18n: can't read {}", path.display());
+        let dir = source.join("i18n").join(code);
+        let Ok(text) = catalog_text(&dir) else {
             return false;
         };
         catalogs.push((code, catalog_keys(&text)));
@@ -115,6 +114,34 @@ pub fn check(root: &Path) -> bool {
 
 /// The list of strings that may be missing from the catalogs for now, beside them in `i18n/`.
 const AWAITING: &str = "awaiting.txt";
+
+/// A language folder's catalogs, merged as `build.rs` merges them: every `*.tsv` in name order,
+/// joined with a newline.
+fn catalog_text(dir: &Path) -> Result<String, ()> {
+    let mut files = Vec::new();
+    let entries = std::fs::read_dir(dir).map_err(|e| {
+        eprintln!("i18n: can't read {}: {e}", dir.display());
+    })?;
+    for entry in entries {
+        let path = entry.map_err(|e| eprintln!("i18n: can't read {}: {e}", dir.display()))?.path();
+        if path.is_file() && path.extension().is_some_and(|e| e == "tsv") {
+            files.push(path);
+        }
+    }
+    files.sort();
+    let mut merged = String::new();
+    for file in files {
+        let text = std::fs::read_to_string(&file).map_err(|e| eprintln!("i18n: can't read {}: {e}", file.display()))?;
+        if !merged.is_empty() && !merged.ends_with('\n') {
+            merged.push('\n');
+        }
+        merged.push_str(&text);
+    }
+    if !merged.is_empty() && !merged.ends_with('\n') {
+        merged.push('\n');
+    }
+    Ok(merged)
+}
 
 /// A catalog's keys, read as the app reads them (`i18n::parse`): a key with an empty translation
 /// shows in English, so it isn't translated.
@@ -220,6 +247,19 @@ mod tests {
         assert_eq!(catalog_keys("# c\nOpen\tÖffnen\nTwo\\nlines\tx\n"), set(&["Open", "Two\nlines"]));
         // An empty translation shows in English, so it isn't one; nor is an indented comment.
         assert_eq!(catalog_keys("Open\t \n  # Close\tx\nCopy\tKopieren\n"), set(&["Copy"]));
+    }
+
+    /// A language folder is read as the app reads it: `*.tsv` in name order, joined with a newline.
+    #[test]
+    fn a_language_folder_merges_its_files_in_name_order() {
+        let dir = std::env::temp_dir().join(format!("craft-anything-i18n-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("b.tsv"), "B\tzwei\n").unwrap();
+        std::fs::write(dir.join("a.tsv"), "A\teins").unwrap();
+        std::fs::write(dir.join("notes.txt"), "A\tdrei\n").unwrap();
+        assert_eq!(catalog_text(&dir).unwrap(), "A\teins\nB\tzwei\n");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// The list in the repository parses, so CI's check reads what's committed.

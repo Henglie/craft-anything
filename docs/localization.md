@@ -15,7 +15,7 @@ matching accepts underscores, case differences and Unix encoding suffixes.
 ## German
 
 **Deutsch** (`de`) uses the informal "du". `de`, `de-DE`, `de-AT` and `de-CH` select it, as does the
-system language when it is German. `crates/ui-egui/src/i18n/de.tsv` has the same keys as the Chinese
+system language when it is German. `crates/ui-egui/src/i18n/de/core.tsv` has the same keys as the Chinese
 catalogs (a unit test compares them), written from the English source strings, not from the Chinese.
 It was drafted with an AI and not yet reviewed by a native speaker; corrections are welcome.
 Product and technology names, tool ids and shortcuts keep their spelling. The kind detection that reads
@@ -25,7 +25,7 @@ so a translated suggestion keeps its project kind.
 ## Estonian
 
 **Eesti** (`et`) is selected by `et` and `et-EE`, and by the system language when it is Estonian.
-`crates/ui-egui/src/i18n/et.tsv` has the same keys as the other catalogs, written from the English
+`crates/ui-egui/src/i18n/et/core.tsv` has the same keys as the other catalogs, written from the English
 source. It was drafted with an AI from the English source, so corrections from native speakers are
 welcome. Product and technology names, tool ids and shortcuts keep their spelling. The glossary:
 *Puhas ruum* (Clean room), *Sügav* (Deep), *Uuri / Ehita / Kontrolli / Valmis* (Study / Build / Check /
@@ -41,13 +41,13 @@ source or topic, not the thing to build, so *Tee sellest mängust veebileht* is 
 ## Georgian
 
 **ქართული** (`ka`) is selected by `ka` and `ka-GE`, and by the system language when it is Georgian.
-`crates/ui-egui/src/i18n/ka.tsv` has the same keys as the other catalogs. Written with Claude Code from the
+`crates/ui-egui/src/i18n/ka/core.tsv` has the same keys as the other catalogs. Written with Claude Code from the
 meaning of each English string; terminology and doubtful strings decided by a native Georgian speaker (@devius).
 Glyphs come from Noto Sans Georgian in craft-fonts, which the pinned craft-fonts already has; a test checks it.
 ## Italian
 
 **Italiano** (`it`) uses the informal "tu". `it` and `it-IT` select it, as does the system language when it is
-Italian. `crates/ui-egui/src/i18n/it.tsv` has the same keys as the other catalogs, written from the English
+Italian. `crates/ui-egui/src/i18n/it/core.tsv` has the same keys as the other catalogs, written from the English
 source strings. It was drafted with an AI and not yet reviewed by a native speaker; corrections are welcome.
 Product and technology names, tool ids and shortcuts keep their spelling. The kind detection that reads a
 request also knows *gioco* and *sito*, so a translated suggestion keeps its project kind. Clean room is
@@ -56,7 +56,7 @@ request also knows *gioco* and *sito*, so a translated suggestion keeps its proj
 ## Vietnamese
 
 **Tiếng Việt** (`vi`) addresses the person as *bạn*. `vi` and `vi-VN` select it, as does the system
-language when it is Vietnamese. `crates/ui-egui/src/i18n/vi.tsv` has the same keys as the other
+language when it is Vietnamese. `crates/ui-egui/src/i18n/vi/core.tsv` has the same keys as the other
 catalogs, written from the English source strings in NFC (precomposed) Unicode. It was drafted with
 an AI and not yet reviewed by a native speaker; corrections are welcome. Product, technology and
 engine names, tool ids and shortcuts keep their spelling. The glossary: *Phòng sạch* (Clean room),
@@ -85,11 +85,18 @@ Thai glyphs come from Noto Sans Thai in craft-fonts, which the script test in `t
 
 ## Scope and format
 
-`crates/ui-egui/src/i18n/cs.tsv`, `de.tsv`, `es.tsv`, `et.tsv`, `it.tsv`, `ka.tsv`, `ko.tsv`, `pt-br.tsv`, `ru.tsv`, `th.tsv`, `tr.tsv`, `vi.tsv`, `zh-hans.tsv` and
-`zh-hant.tsv` contain original
-translations under the repository's MIT OR Apache-2.0 licence. Each UTF-8 line
-has two columns: `English source<TAB>translation`. Comments begin with `#`;
-`\n` represents a newline. The language registry in `i18n.rs` embeds the catalogs.
+`crates/ui-egui/src/i18n/<code>/core.tsv` (`cs`, `de`, `es`, `et`, `it`, `ka`, `ko`, `pt-br`,
+`ru`, `th`, `tr`, `vi`, `zh-hans` and `zh-hant`) contains original translations under the
+repository's MIT OR Apache-2.0 licence. Each UTF-8 line has two columns:
+`English source<TAB>translation`. Comments begin with `#`; `\n` represents a newline.
+
+A PR that adds UI strings puts its new strings in its own `.tsv` file in each language folder,
+named for its branch or roadmap item (`i18n/de/r5.4-context-budget.tsv`), so two PRs never edit
+the same lines. `build.rs` merges each folder's `*.tsv` files in name order into `OUT_DIR`, and a
+key defined in two files fails the build. A small feature file can be merged into `core.tsv`
+after its PR lands, but it doesn't have to be. The language registry in `i18n.rs` embeds the
+merged catalogs. French (`crates/ui-egui/src/fr.tsv`) and Japanese (`ja.tsv`) are single files
+for now and are not part of the strict key-parity test.
 
 The catalogs cover first run, new projects, project controls, Settings, the
 workbench, tool titles, tool groups, target descriptions, tooltips and
@@ -102,10 +109,10 @@ descriptions, logs and exported reports retain their original text. The CLI,
 MCP, tool IDs, stored project data and the separate browser viewer are unchanged.
 
 Keep placeholders such as `{name}` and `{n}` intact, along with command IDs,
-shortcuts, escapes and trailing `…`. Update every catalog (`cs`, `de`, `es`, `et`, `it`, `ka`, `ko`, `pt-br`, `ru`, `th`, `tr`, `vi`, `zh-hans`, `zh-hant`)
+shortcuts, escapes and trailing `…`. Update every catalog folder (`cs`, `de`, `es`, `et`, `it`, `ka`, `ko`, `pt-br`, `ru`, `th`, `tr`, `vi`, `zh-hans`, `zh-hant`)
 when English source keys change; the tests require matching key sets. Common terms include 净室 / 淨室 (Clean room), 深度 (Deep),
 构建 / 建置 (Build), 证据 / 證據 (Evidence), and 项目 / 專案 (Project).
-The Korean catalog `ko.tsv` uses 클린룸 (Clean room), 심층 (Deep), 분석 / 만들기 / 검사 / 완성
+The Korean catalog `ko/core.tsv` uses 클린룸 (Clean room), 심층 (Deep), 분석 / 만들기 / 검사 / 완성
 (Study / Build / Check / Ready), 근거 (Evidence) and 프로젝트 (Project); short labels are nouns and
 sentences use the formal 합니다 style.
 

@@ -3,7 +3,12 @@
 //! time. A string with no translation is shown in English. Tool ids, the CLI and MCP never see
 //! translated text.
 //!
-//! Adding a language: put `xx.tsv` in `i18n/` and add one row to [`LANGUAGES`].
+//! Catalogs live in `i18n/<code>/`: `core.tsv` holds the existing translations, and a PR that adds
+//! strings puts them in its own `.tsv` beside it (for example `i18n/de/r5.4-context-budget.tsv`).
+//! `build.rs` concatenates each folder's files in name order into `OUT_DIR`; a duplicate key fails
+//! the build.
+//!
+//! Adding a language: put `i18n/xx/core.tsv` in `i18n/` and add one row to [`LANGUAGES`].
 
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
@@ -20,22 +25,22 @@ pub struct LangInfo {
 
 pub static LANGUAGES: &[LangInfo] = &[
     LangInfo { code: "en", name: "English", source: "" },
-    LangInfo { code: "de", name: "Deutsch", source: include_str!("i18n/de.tsv") },
-    LangInfo { code: "ka", name: "ქართული", source: include_str!("i18n/ka.tsv") },
+    LangInfo { code: "de", name: "Deutsch", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/de.tsv")) },
+    LangInfo { code: "ka", name: "ქართული", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/ka.tsv")) },
     LangInfo { code: "fr", name: "Français", source: include_str!("fr.tsv") },
-    LangInfo { code: "it", name: "Italiano", source: include_str!("i18n/it.tsv") },
+    LangInfo { code: "it", name: "Italiano", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/it.tsv")) },
     LangInfo { code: "ja", name: "日本語", source: include_str!("ja.tsv") },
-    LangInfo { code: "zh-hans", name: "简体中文", source: include_str!("i18n/zh-hans.tsv") },
-    LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!("i18n/zh-hant.tsv") },
-    LangInfo { code: "ru", name: "Русский", source: include_str!("i18n/ru.tsv") },
-    LangInfo { code: "ko", name: "한국어", source: include_str!("i18n/ko.tsv") },
-    LangInfo { code: "cs", name: "Čeština", source: include_str!("i18n/cs.tsv") },
-    LangInfo { code: "es", name: "Español", source: include_str!("i18n/es.tsv") },
-    LangInfo { code: "vi", name: "Tiếng Việt", source: include_str!("i18n/vi.tsv") },
-    LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!("i18n/pt-br.tsv") },
-    LangInfo { code: "tr", name: "Türkçe", source: include_str!("i18n/tr.tsv") },
-    LangInfo { code: "th", name: "ไทย", source: include_str!("i18n/th.tsv") },
-    LangInfo { code: "et", name: "Eesti", source: include_str!("i18n/et.tsv") },
+    LangInfo { code: "zh-hans", name: "简体中文", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/zh-hans.tsv")) },
+    LangInfo { code: "zh-hant", name: "繁體中文", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/zh-hant.tsv")) },
+    LangInfo { code: "ru", name: "Русский", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/ru.tsv")) },
+    LangInfo { code: "ko", name: "한국어", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/ko.tsv")) },
+    LangInfo { code: "cs", name: "Čeština", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/cs.tsv")) },
+    LangInfo { code: "es", name: "Español", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/es.tsv")) },
+    LangInfo { code: "vi", name: "Tiếng Việt", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/vi.tsv")) },
+    LangInfo { code: "pt-br", name: "Português (Brasil)", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/pt-br.tsv")) },
+    LangInfo { code: "tr", name: "Türkçe", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/tr.tsv")) },
+    LangInfo { code: "th", name: "ไทย", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/th.tsv")) },
+    LangInfo { code: "et", name: "Eesti", source: include_str!(concat!(env!("OUT_DIR"), "/i18n/et.tsv")) },
 ];
 
 /// Match a locale to a registered UI language. An explicit script wins over the region.

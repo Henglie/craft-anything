@@ -106,6 +106,70 @@ pub fn registry_tools(reg: &Registry, enabled: &BTreeSet<Toolset>) -> Vec<ToolDe
         .collect()
 }
 
+/// A model can write a number as a JSON string (`"200"` for 200), especially smaller local
+/// models. Read those as numbers where the tool's own schema says integer or number; everything
+/// else stays as written, so a list where text is expected is still refused (#1825).
+fn numeric_strings_as_numbers(input: Value, schema: &Value) -> Value {
+    if schema_expects_number(schema) {
+        if let Value::String(s) = &input
+            && let Ok(Value::Number(n)) = serde_json::from_str::<Value>(s.trim())
+        {
+            return Value::Number(n);
+        }
+        return input;
+    }
+    match input {
+        Value::Object(map) => {
+            let properties = schema.get("properties").and_then(Value::as_object);
+            Value::Object(
+                map.into_iter()
+                    .map(|(key, value)| {
+                        let value = match properties.and_then(|p| p.get(&key)) {
+                            Some(schema) => numeric_strings_as_numbers(value, schema),
+                            None => value,
+                        };
+                        (key, value)
+                    })
+                    .collect(),
+            )
+        }
+        Value::Array(items) => match schema.get("items") {
+            Some(item_schema) => Value::Array(items.into_iter().map(|item| numeric_strings_as_numbers(item, item_schema)).collect()),
+            None => Value::Array(items),
+        },
+        other => other,
+    }
+}
+
+/// Whether a schema accepts a JSON number (an integer or a number, possibly beside null). A
+/// schema that also accepts a string is left alone: its string may be meant as one.
+fn schema_expects_number(schema: &Value) -> bool {
+    fn numeric_type(t: &Value) -> bool {
+        t.as_str().is_some_and(|t| matches!(t, "integer" | "number"))
+    }
+    if schema_expects_string(schema) {
+        return false;
+    }
+    if let Some(t) = schema.get("type")
+        && (numeric_type(t) || t.as_array().is_some_and(|a| a.iter().any(numeric_type)))
+    {
+        return true;
+    }
+    ["anyOf", "oneOf"].iter().any(|key| schema.get(*key).and_then(Value::as_array).is_some_and(|a| a.iter().any(schema_expects_number)))
+}
+
+fn schema_expects_string(schema: &Value) -> bool {
+    fn string_type(t: &Value) -> bool {
+        t.as_str() == Some("string")
+    }
+    if let Some(t) = schema.get("type")
+        && (string_type(t) || t.as_array().is_some_and(|a| a.iter().any(string_type)))
+    {
+        return true;
+    }
+    ["anyOf", "oneOf"].iter().any(|key| schema.get(*key).and_then(Value::as_array).is_some_and(|a| a.iter().any(schema_expects_string)))
+}
+
 impl ToolHost for EngineHost {
     fn tools(&self, enabled: &BTreeSet<Toolset>) -> Vec<ToolDef> {
         // Clean room offers only the tools it runs.
@@ -122,6 +186,10 @@ impl ToolHost for EngineHost {
     }
 
     fn call(&self, id: &str, input: Value, consent: bool, cancel: CancelToken) -> Result<ToolOutput, ToolError> {
+        let input = match self.0.registry().get(id) {
+            Some(spec) => numeric_strings_as_numbers(input, &self.0.registry().input_schema(spec)),
+            None => input,
+        };
         let opts = CallOptions::new(Caller::Agent).with_cancel(cancel).with_consent(if consent { Consent::Granted } else { Consent::NotAsked });
         self.0.call(id, input, opts)
     }
@@ -1074,6 +1142,39 @@ pub(crate) mod tests {
             boolean_subschemas(&t.schema, &t.name, &mut bad);
         }
         assert!(bad.is_empty(), "boolean sub-schemas left: {bad:?}");
+    }
+
+    /// A model that writes a number as a JSON string gets it read as the number the schema asks
+    /// for, at any depth; strings, lists and other values stay as written (#1825).
+    #[test]
+    fn digit_strings_for_number_options_are_read_as_numbers() {
+        let schema = json!({"type": "object", "properties": {
+            "limit": {"type": ["integer", "null"]},
+            "depth": {"type": "integer"},
+            "path": {"type": "string"},
+            "either": {"anyOf": [{"type": "string"}, {"type": "integer"}]},
+            "items": {"type": "array", "items": {"anyOf": [{"type": "integer"}, {"type": "null"}]}},
+        }});
+        let input = json!({"limit": "200", "depth": "8", "path": "200", "either": "5", "items": ["1", 2], "unknown": "3"});
+        assert_eq!(
+            numeric_strings_as_numbers(input, &schema),
+            json!({"limit": 200, "depth": 8, "path": "200", "either": "5", "items": [1, 2], "unknown": "3"})
+        );
+    }
+
+    /// The model-facing host applies that reading before a tool runs, so a digit string in a
+    /// numeric option is not refused; a non-digit string still is.
+    #[test]
+    fn the_engine_host_reads_digit_strings_for_number_options() {
+        let dir = craft_anything_engine::testing::temp_dir();
+        let file = dir.join("notes.txt");
+        std::fs::write(&file, "one\ntwo\n").unwrap();
+        let host = EngineHost(Arc::new(Engine::new(craft_anything_engine::testing::session())));
+        let path = file.display().to_string();
+        let out = host.call("core_text_read", json!({"path": path, "offset": "0", "limit": "1"}), false, CancelToken::default()).unwrap();
+        assert_eq!(out.to_json()["result"]["text"], "one\n");
+        let err = host.call("core_text_read", json!({"path": path, "offset": "1x"}), false, CancelToken::default()).unwrap_err();
+        assert!(err.message.contains("invalid params"), "{err:?}");
     }
 
     #[test]

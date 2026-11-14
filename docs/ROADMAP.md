@@ -484,6 +484,11 @@ been run live.
 - [x] Return a rejected tool argument's JSON Pointer when known and guidance to correct the call
       (#498), keeping schema types strict
       — commit `0c3ae5cca569`
+- [x] A local builder that writes a numeric tool option as a JSON string (`"limit": "200"`) was
+      refused and retried the same call (#1825): read a digit string as the number where the tool's
+      schema says integer or number, only on the model-facing host, so every other type stays
+      strict
+      — claimed: Henglie, branch bugfix/r5.4-numeric-string-tool-options
 - [ ] Find how each local server is told its context size and set it, or stop with a plain message
       when the prompt won't fit. We assume 24k and send no `num_ctx`, which an OpenAI-style endpoint
       may ignore anyway; LM Studio refused a 12.6k prompt on its 8k default (#73). Ollama 0.40.15

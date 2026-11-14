@@ -109,8 +109,9 @@ pub fn registry_tools(reg: &Registry, enabled: &BTreeSet<Toolset>) -> Vec<ToolDe
 /// A model can write a number as a JSON string (`"200"` for 200), especially smaller local
 /// models. Read those as numbers where the tool's own schema says integer or number; everything
 /// else stays as written, so a list where text is expected is still refused (#1825).
-fn numeric_strings_as_numbers(input: Value, schema: &Value) -> Value {
-    if schema_expects_number(schema) {
+fn numeric_strings_as_numbers(input: Value, schema: &Value, root: &Value) -> Value {
+    let schema = resolve_schema(root, schema);
+    if schema_expects_number(schema, root, 0) {
         if let Value::String(s) = &input
             && let Ok(Value::Number(n)) = serde_json::from_str::<Value>(s.trim())
         {
@@ -119,35 +120,106 @@ fn numeric_strings_as_numbers(input: Value, schema: &Value) -> Value {
         return input;
     }
     match input {
-        Value::Object(map) => {
-            let properties = schema.get("properties").and_then(Value::as_object);
-            Value::Object(
-                map.into_iter()
-                    .map(|(key, value)| {
-                        let value = match properties.and_then(|p| p.get(&key)) {
-                            Some(schema) => numeric_strings_as_numbers(value, schema),
-                            None => value,
-                        };
-                        (key, value)
-                    })
-                    .collect(),
-            )
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(key, value)| {
+                    let mut schemas = Vec::new();
+                    property_schemas(root, schema, &key, &mut schemas, 0);
+                    (key, with_schemas(value, &schemas, root))
+                })
+                .collect(),
+        ),
+        Value::Array(items) => {
+            let mut schemas = Vec::new();
+            item_schemas(root, schema, &mut schemas, 0);
+            Value::Array(items.into_iter().map(|item| with_schemas(item, &schemas, root)).collect())
         }
-        Value::Array(items) => match schema.get("items") {
-            Some(item_schema) => Value::Array(items.into_iter().map(|item| numeric_strings_as_numbers(item, item_schema)).collect()),
-            None => Value::Array(items),
-        },
         other => other,
     }
 }
 
+/// Follow a local `$ref` (`#/$defs/Name` or `#/definitions/Name`) inside the tool's own schema.
+fn resolve_schema<'a>(root: &'a Value, schema: &'a Value) -> &'a Value {
+    let mut schema = schema;
+    for _ in 0..MAX_SCHEMA_DEPTH {
+        let Some(pointer) = schema.get("$ref").and_then(Value::as_str).and_then(|r| r.strip_prefix("#/")) else { break };
+        let mut target = root;
+        let mut found = true;
+        for part in pointer.split('/') {
+            match target.get(part) {
+                Some(next) => target = next,
+                None => {
+                    found = false;
+                    break;
+                }
+            }
+        }
+        if !found {
+            break;
+        }
+        schema = target;
+    }
+    schema
+}
+
+/// The schemas that describe `key` in `schema`: its own `properties`, then object
+/// alternatives in `anyOf`/`oneOf`, resolving local `$ref`s.
+fn property_schemas<'a>(root: &'a Value, schema: &'a Value, key: &str, out: &mut Vec<&'a Value>, depth: usize) {
+    if depth >= MAX_SCHEMA_DEPTH {
+        return;
+    }
+    let schema = resolve_schema(root, schema);
+    if let Some(sub) = schema.get("properties").and_then(Value::as_object).and_then(|p| p.get(key)) {
+        out.push(sub);
+    }
+    for alternatives in ["anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(alternatives).and_then(Value::as_array) {
+            for branch in branches {
+                property_schemas(root, branch, key, out, depth + 1);
+            }
+        }
+    }
+}
+
+/// The item schemas of `schema`: its own `items`, then array alternatives in `anyOf`/`oneOf`,
+/// resolving local `$ref`s.
+fn item_schemas<'a>(root: &'a Value, schema: &'a Value, out: &mut Vec<&'a Value>, depth: usize) {
+    if depth >= MAX_SCHEMA_DEPTH {
+        return;
+    }
+    let schema = resolve_schema(root, schema);
+    if let Some(items) = schema.get("items") {
+        out.push(items);
+    }
+    for key in ["anyOf", "oneOf"] {
+        if let Some(branches) = schema.get(key).and_then(Value::as_array) {
+            for branch in branches {
+                item_schemas(root, branch, out, depth + 1);
+            }
+        }
+    }
+}
+
+/// Convert using every matching schema, but leave the value alone when any of them also accepts
+/// a string: the model's string may be meant as one.
+fn with_schemas(input: Value, schemas: &[&Value], root: &Value) -> Value {
+    if schemas.is_empty() || schemas.iter().any(|schema| schema_expects_string(schema, root, 0)) {
+        return input;
+    }
+    schemas.iter().fold(input, |value, schema| numeric_strings_as_numbers(value, schema, root))
+}
+
 /// Whether a schema accepts a JSON number (an integer or a number, possibly beside null). A
 /// schema that also accepts a string is left alone: its string may be meant as one.
-fn schema_expects_number(schema: &Value) -> bool {
+fn schema_expects_number(schema: &Value, root: &Value, depth: usize) -> bool {
+    if depth >= MAX_SCHEMA_DEPTH {
+        return false;
+    }
+    let schema = resolve_schema(root, schema);
     fn numeric_type(t: &Value) -> bool {
         t.as_str().is_some_and(|t| matches!(t, "integer" | "number"))
     }
-    if schema_expects_string(schema) {
+    if schema_expects_string(schema, root, depth) {
         return false;
     }
     if let Some(t) = schema.get("type")
@@ -155,10 +227,14 @@ fn schema_expects_number(schema: &Value) -> bool {
     {
         return true;
     }
-    ["anyOf", "oneOf"].iter().any(|key| schema.get(*key).and_then(Value::as_array).is_some_and(|a| a.iter().any(schema_expects_number)))
+    ["anyOf", "oneOf"].iter().any(|key| schema.get(*key).and_then(Value::as_array).is_some_and(|a| a.iter().any(|s| schema_expects_number(s, root, depth + 1))))
 }
 
-fn schema_expects_string(schema: &Value) -> bool {
+fn schema_expects_string(schema: &Value, root: &Value, depth: usize) -> bool {
+    if depth >= MAX_SCHEMA_DEPTH {
+        return false;
+    }
+    let schema = resolve_schema(root, schema);
     fn string_type(t: &Value) -> bool {
         t.as_str() == Some("string")
     }
@@ -167,7 +243,7 @@ fn schema_expects_string(schema: &Value) -> bool {
     {
         return true;
     }
-    ["anyOf", "oneOf"].iter().any(|key| schema.get(*key).and_then(Value::as_array).is_some_and(|a| a.iter().any(schema_expects_string)))
+    ["anyOf", "oneOf"].iter().any(|key| schema.get(*key).and_then(Value::as_array).is_some_and(|a| a.iter().any(|s| schema_expects_string(s, root, depth + 1))))
 }
 
 impl ToolHost for EngineHost {
@@ -187,7 +263,10 @@ impl ToolHost for EngineHost {
 
     fn call(&self, id: &str, input: Value, consent: bool, cancel: CancelToken) -> Result<ToolOutput, ToolError> {
         let input = match self.0.registry().get(id) {
-            Some(spec) => numeric_strings_as_numbers(input, &self.0.registry().input_schema(spec)),
+            Some(spec) => {
+                let schema = self.0.registry().input_schema(spec);
+                numeric_strings_as_numbers(input, &schema, &schema)
+            }
             None => input,
         };
         let opts = CallOptions::new(Caller::Agent).with_cancel(cancel).with_consent(if consent { Consent::Granted } else { Consent::NotAsked });
@@ -1157,9 +1236,61 @@ pub(crate) mod tests {
         }});
         let input = json!({"limit": "200", "depth": "8", "path": "200", "either": "5", "items": ["1", 2], "unknown": "3"});
         assert_eq!(
-            numeric_strings_as_numbers(input, &schema),
+            numeric_strings_as_numbers(input, &schema, &schema),
             json!({"limit": 200, "depth": 8, "path": "200", "either": "5", "items": [1, 2], "unknown": "3"})
         );
+    }
+
+    /// Object and array schemas inside `anyOf`/`oneOf` alternatives are traversed too, and a
+    /// string field in one is still left as written.
+    #[test]
+    fn digit_strings_inside_alternatives_are_read_as_numbers() {
+        let schema = json!({"type": "object", "properties": {
+            "range": {"anyOf": [
+                {"type": "object", "properties": {"offset": {"type": "integer"}, "length": {"type": "integer"}}},
+                {"type": "null"}
+            ]},
+            "windows": {"oneOf": [
+                {"type": "array", "items": {"type": "object", "properties": {"start": {"type": "integer"}}}},
+                {"type": "null"}
+            ]},
+            "name": {"anyOf": [{"type": "object", "properties": {"text": {"type": "string"}}}, {"type": "null"}]},
+        }});
+        let input = json!({
+            "range": {"offset": "0", "length": "4096"},
+            "windows": [{"start": "8"}],
+            "name": {"text": "200"},
+        });
+        assert_eq!(
+            numeric_strings_as_numbers(input, &schema, &schema),
+            json!({"range": {"offset": 0, "length": 4096}, "windows": [{"start": 8}], "name": {"text": "200"}})
+        );
+    }
+
+    /// A local `$ref` to a definition is followed, so an optional object such as
+    /// `RegionsParams.range` (`Option<ByteRange>`) has its numeric fields read as numbers.
+    #[test]
+    fn digit_strings_inside_a_referenced_object_are_read_as_numbers() {
+        let reg = Registry::with_all_tools();
+        let schema = reg.get("firmware_regions_list").map(|s| reg.input_schema(s)).unwrap_or_default();
+        let input = json!({"path": "image.bin", "range": {"offset": "0", "length": "4096"}, "limit": "1"});
+        let out = numeric_strings_as_numbers(input, &schema, &schema);
+        assert_eq!(out["range"], json!({"offset": 0, "length": 4096}));
+        assert_eq!(out["limit"], 1);
+        assert_eq!(out["path"], "image.bin");
+    }
+
+    /// The host reads digit strings in an optional nested object before the tool parses them,
+    /// so the real `ByteRange` fields are numbers.
+    #[test]
+    fn the_engine_host_reads_digit_strings_in_an_optional_nested_object() {
+        let dir = craft_anything_engine::testing::temp_dir();
+        let file = dir.join("image.bin");
+        std::fs::write(&file, b"not a real image").unwrap();
+        let host = EngineHost(Arc::new(Engine::new(craft_anything_engine::testing::session())));
+        let path = file.display().to_string();
+        host.call("firmware_regions_list", json!({"path": path, "range": {"offset": "0", "length": "2"}, "limit": "1"}), false, CancelToken::default())
+            .unwrap();
     }
 
     /// The model-facing host applies that reading before a tool runs, so a digit string in a
